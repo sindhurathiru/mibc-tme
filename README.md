@@ -1,2 +1,5 @@
-# cellAnnotation-IMC
-Automated cell phenotyping for imaging mass cytometry data using a deep convolutional autoencoder with joint classifier
+# Evaluation of MIBC Patients' TME
+
+A preliminary analysis demonstrating the application of machine learning in an automated pipeline to study the tumour microenvironment in matched biopsy and cystectomy tissue samples.
+
+cysVtur.py contains code to complete this analysis using a deep autoencoder.
