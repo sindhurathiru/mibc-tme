@@ -10,10 +10,6 @@ from tensorflow.keras.models import load_model
 import os
 
 # Pre-processing of raw data
-path = r"C:\\Users\\sindhura\\OneDrive - Queen's University\\Queens\\Research MSc\\Bladder Data\\Processed Features\\Slide_1\\Non-compensated Labeled Data" # use your path
-path2 = r"C:\\Users\\sindhura\\OneDrive - Queen's University\\Queens\\Research MSc\\Bladder Data\\Processed Features\\Slide_2\\Non-compensated Labeled Data" # use your path
-path3 = r"C:\\Users\\sindhura\\OneDrive - Queen's University\\Queens\\Research MSc\\Bladder Data\\Processed Features\\Slide_3\\Clustered Data" # use your path
-
 def preprocess(path, path2, path3):
   """
   Function retrieves mean intensity and cell type data from all biopsy and cystectomy files.
@@ -167,4 +163,114 @@ def preprocess(path, path2, path3):
                      '170Er_170Er-CD3.ome.tiff', 
                      '173Yb_173Yb-CD45RO.ome.tiff', '174Yb_174Yb-HLA-DR.ome.tiff', 
                      "CYSvTUR", "Cell Type", "ROI", "Patient"]]
+  return rawData
+
+ def removeOutlier(rawData):
+  """
+  Find and remove any outliers in data
+  """
+  outlierCheck = rawData[rawData.columns[:23]]
+  from scipy import stats
+  nonOutliers = (np.abs(stats.zscore(outlierCheck)) < 4).all(axis=1)
+  xRemOutlier = rawData[nonOutliers]
+  xRemOutlier = xRemOutlier.reset_index(drop=True)
+  return xRemOutlier
+
+def trainTestSplit(xRemOutlier):
+  """
+  Split data into training and testing sets.
+  """
+  from sklearn.model_selection import train_test_split
+  from imblearn.over_sampling import SMOTE
+
+  # Splitting data using stratified random sampling
+  labelData = xRemOutlier["Cell Type"]
+  trainData = xRemOutlier.drop(["ROI", "Cell Type", "Patient", "CYSvTUR"], 1)
+  x_train, x_test, y_train, y_test = train_test_split(trainData, labelData, test_size=0.33, random_state=42, stratify=labelData)
+
+  # Balance datasets
+  x_train, y_train = SMOTE().fit_resample(x_train, y_train)
+
+  return x_train, x_test, y_train, y_test
+
+def deepAutoencoder(x_train, x_test, y_train, y_test):
+  import tensorflow.compat.v1 as tf
+  tf.disable_v2_behavior()
+  
+  from tensorflow.keras.callbacks import EarlyStopping
+
+  adam = tf.keras.optimizers.Adam(learning_rate=0.00005)
+  bottleneck_size = 2 # number of dimensions to view latent space in; same as "code size"
+  input_data = Input(shape=(23,)) # number of columns
+
+  encoded = Dense(18, activation='relu')(input_data)
+  encoded = Dense(12, activation='relu')(encoded)
+  encoded = Dense(6, activation='relu')(encoded)
+  encoded = Dense(bottleneck_size, activation='linear')(encoded)
+  encoder = Model(input_data, encoded)
+
+  encoded_input = Input(shape=(bottleneck_size,))
+  decoded = Dense(6, activation='relu')(encoded_input)
+  decoded = Dense(12, activation='relu')(decoded)
+  decoded = Dense(18, activation='relu')(decoded)
+  decoded = Dense(23, activation='sigmoid')(decoded)
+  decoder = Model(encoded_input, decoded)
+
+  output_data = decoder(encoder(input_data))
+  ae = Model(input_data, output_data)
+  ae.compile(optimizer=adam, loss='binary_crossentropy') # using binary cross entropy since input values are in range [0,1]
+
+  early_stopping = EarlyStopping(patience=10)
+  history = ae.fit(x_train, x_train, epochs=15000, batch_size=256, validation_data=(x_test, x_test), callbacks=[early_stopping])
+
+  encoded_data = encoder.predict(x_test)
+  decoded_data = decoder.predict(encoded_data)
+  latentSpaceData = encoder.predict(trainData)
+  
+  return history, encoded_data, decoded_data
+  
+def plot_metric(history, metric):
+  """
+  Plot loss
+  """
+  train_metrics = history.history[metric]
+  val_metrics = history.history['val_'+metric]
+  epochs = range(2, len(train_metrics) + 1)
+  plt.plot(epochs, train_metrics[1:])
+  plt.plot(epochs, val_metrics[1:])
+  plt.title('Training and validation '+ metric)
+  plt.xlabel("Epochs")
+  plt.ylabel(metric)
+  plt.legend(["train_"+metric, 'val_'+metric])
+  plt.show()
+    
+def latentSpace(latentSpaceData, xRemOutlier):
+  """
+  Add latent space coordinates to dataset.
+  """
+  latentSpaceDf = pd.DataFrame(latentSpaceData)
+  latentSpaceDf["Cell Type"] = xRemOutlier["Cell Type"]
+  latentSpaceDf["CYSvTUR"] = xRemOutlier["CYSvTUR"]
+  latentSpaceDf["Patient"] = xRemOutlier["Patient"]
+  latentSpaceDf["ROI"] = xRemOutlier["ROI"]
+
+  latentSpaceDf.columns = ['Dim 1', 'Dim 2', "Cell Type", "CYSvTUR", "Patient", "ROI"]
+  ctypes = le.inverse_transform(latentSpaceDf["Cell Type"])
+  latentSpaceDf["Cell Type"] = ctypes
+
+  return latentSpaceDf
+  
+  
+def main():
+  path = r"C:\\Users\\sindhura\\OneDrive - Queen's University\\Queens\\Research MSc\\Bladder Data\\Processed Features\\Slide_1\\Non-compensated Labeled Data" # use your path
+  path2 = r"C:\\Users\\sindhura\\OneDrive - Queen's University\\Queens\\Research MSc\\Bladder Data\\Processed Features\\Slide_2\\Non-compensated Labeled Data" # use your path
+  path3 = r"C:\\Users\\sindhura\\OneDrive - Queen's University\\Queens\\Research MSc\\Bladder Data\\Processed Features\\Slide_3\\Clustered Data" # use your path
+
+  rawData = preprocess(path, path2, path3)
+  xRemOutlier = removeOutlier(rawData)
+  x_train, x_test, y_train, y_test = trainTestSplit(xRemOutlier)
+  history, encoded_data, decoded_data, latentSpaceData = deepAutoencoder(x_train, x_test, y_train, y_test)
+  plot_metric(history, 'loss')
+  latentSpaceDf = latentSpace(latentSpaceData, xRemOutlier)
+  latentSpaceDf.to_csv("C:\\Users\\sindhura\\OneDrive - Queen's University\\Queens\\Research MSc\\Bladder Data\\CYS vs TUR\\AE Plots\\Slide 118\\full_latent_space_data.csv")
 
